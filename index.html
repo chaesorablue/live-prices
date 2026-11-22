@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>실시간 시세</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* 작은 세로 창: 종목 4줄 카드, 틱마다 가격이 깜빡임. 홈페이지와 같은 쇳물 오렌지 */
+:root{
+  --bg:#eef1f4; --surface:#fff; --ink:#15212c; --muted:#5b6b7a; --line:#d3dae1;
+  --molten:#d9531a; --up:#d02b3c; --down:#2563c9; --upbg:#fde4e6; --downbg:#e1ebfb;
+  --f-display:"Black Han Sans","Noto Sans KR",system-ui,sans-serif;
+  --f-body:"Noto Sans KR",system-ui,"Malgun Gothic",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f161d; --surface:#17212b; --ink:#e6ecf1; --muted:#93a3b2; --line:#26333f;
+  --molten:#ff7a3d; --up:#ff6b78; --down:#6ea4ff; --upbg:#3a1a1f; --downbg:#17263f; color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;padding:14px 14px 10px}
+header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.pour{width:6px;align-self:stretch;border-radius:3px;background:linear-gradient(180deg,var(--molten),#f2a23a)}
+h1{font-family:var(--f-display);font-weight:400;font-size:22px;margin:0;line-height:1.1}
+h1 small{display:block;font-family:var(--f-body);font-size:12px;color:var(--muted);margin-top:2px}
+.live{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.live.on .dot{background:#2bb673;box-shadow:0 0 0 0 rgba(43,182,115,.6);animation:pulse 1.6s infinite}
+.live.warn .dot{background:#e5a50a}
+@keyframes pulse{70%{box-shadow:0 0 0 6px rgba(43,182,115,0)}100%{box-shadow:0 0 0 0 rgba(43,182,115,0)}}
+.list{display:flex;flex-direction:column;gap:8px}
+.row{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;grid-template-columns:1fr auto;gap:2px 10px}
+.name{font-weight:700;font-size:15px}
+.name span{font-family:var(--f-mono);font-size:11px;color:var(--muted);font-weight:500;margin-left:6px}
+.usd{font-family:var(--f-mono);font-size:24px;font-weight:500;font-variant-numeric:tabular-nums;grid-column:1;border-radius:4px;padding:0 2px;margin-left:-2px;transition:background .6s}
+.usd.fu{background:var(--upbg);transition:none}.usd.fd{background:var(--downbg);transition:none}
+.chg{grid-column:2;grid-row:1/3;align-self:center;text-align:right;font-family:var(--f-mono);font-weight:500;font-size:15px;font-variant-numeric:tabular-nums}
+.chg small{display:block;font-size:10px;color:var(--muted);font-weight:400}
+.sub{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:2px 14px;font-family:var(--f-mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.sub b{color:var(--ink);font-weight:500}
+.up{color:var(--up)}.down{color:var(--down)}
+footer{margin-top:10px;font-size:11px;color:var(--muted);line-height:1.5}
+@media (prefers-reduced-motion:reduce){.live.on .dot{animation:none}.usd{transition:none}}
+</style>
+</head>
+<body>
+<header>
+  <div class="pour" aria-hidden="true"></div>
+  <h1>실시간 시세<small>바이낸스 달러 · 업비트 원화</small></h1>
+  <div class="live" id="live"><span class="dot"></span><span id="livetxt">연결 중</span></div>
+</header>
+
+<div class="list" id="list"></div>
+
+<footer>
+  <div id="fx">USDT 원화 —</div>
+  <div>금은 XAUT(테더 골드, 실물 금 1온스 연동 토큰) 시세입니다. 24h 변동은 바이낸스 기준. 투자 권유가 아닙니다.</div>
+</footer>
+
+<script>
+const COINS = [
+  {s:"BTC",  name:"비트코인",   bn:"btcusdt",  up:"KRW-BTC"},
+  {s:"XAUT", name:"금",        bn:"xautusdt", up:"KRW-XAUT", gold:true},
+  {s:"SOL",  name:"솔라나",     bn:"solusdt",  up:"KRW-SOL"},
+  {s:"AVAX", name:"아발란체",   bn:"avaxusdt", up:"KRW-AVAX"},
+];
+const st = {}; COINS.forEach(c=>st[c.s]={usd:null,chg:null,krw:null});
+let usdtKrw = null, lastBn = 0, lastUp = 0;
+const $ = id => document.getElementById(id);
+
+$("list").innerHTML = COINS.map(c=>`
+  <div class="row" id="r-${c.s}">
+    <div class="name">${c.name}<span>${c.s}</span></div>
+    <div class="usd" id="u-${c.s}">—</div>
+    <div class="chg" id="c-${c.s}">—<small>24h</small></div>
+    <div class="sub"><span>원화 <b id="k-${c.s}">—</b></span><span>김프 <b id="p-${c.s}">—</b></span>${c.gold?`<span>1돈 <b id="d-${c.s}">—</b></span>`:""}</div>
+  </div>`).join("");
+
+const fUsd = v => v==null ? "—" : "$" + (v>=1000 ? v.toLocaleString("en-US",{maximumFractionDigits:0}) : v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:v<10?3:2}));
+const fKrw = v => v==null ? "—" : "₩" + Math.round(v).toLocaleString("ko-KR");
+
+function paint(s, flashDir){
+  const c = st[s];
+  const u = $("u-"+s);
+  u.textContent = fUsd(c.usd);
+  if (flashDir){ u.classList.remove("fu","fd"); void u.offsetWidth; u.classList.add(flashDir>0?"fu":"fd"); setTimeout(()=>u.classList.remove("fu","fd"),120); }
+  if (c.chg!=null){
+    const el=$("c-"+s); el.className="chg "+(c.chg>=0?"up":"down");
+    el.innerHTML=`${c.chg>=0?"▲ +":"▼ "}${c.chg.toFixed(2)}%<small>24h</small>`;
+  }
+  $("k-"+s).textContent = fKrw(c.krw);
+  const p = $("p-"+s);
+  if (c.krw && c.usd && usdtKrw){
+    const k = (c.krw/(c.usd*usdtKrw)-1)*100;
+    p.textContent = (k>=0?"+":"")+k.toFixed(2)+"%"; p.className = k>=0?"up":"down";
+  }
+  const d = $("d-"+s); if (d && c.krw) d.textContent = fKrw(c.krw/31.1035*3.75);
+}
+
+/* 바이낸스: 실시간 웹소켓 (끊기면 3초 뒤 재연결) */
+function binance(){
+  const url = "wss://stream.binance.com:9443/stream?streams=" + COINS.map(c=>c.bn+"@ticker").join("/");
+  const ws = new WebSocket(url);
+  ws.onmessage = e => {
+    const d = JSON.parse(e.data).data; if(!d) return;
+    const c = COINS.find(x=>x.bn===d.s.toLowerCase()); if(!c) return;
+    const prev = st[c.s].usd, now = +d.c;
+    st[c.s].usd = now; st[c.s].chg = +d.P; lastBn = Date.now();
+    paint(c.s, prev==null||now===prev ? 0 : (now>prev?1:-1));
+  };
+  ws.onclose = () => setTimeout(binance, 3000);
+  ws.onerror = () => ws.close();
+}
+
+/* 업비트: 실시간 웹소켓, 실패하면 5초마다 조회 */
+function upbit(){
+  const ws = new WebSocket("wss://api.upbit.com/websocket/v1");
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => ws.send(JSON.stringify([{ticket:"lp-"+Date.now()},{type:"ticker",codes:[...COINS.map(c=>c.up),"KRW-USDT"],isOnlyRealtime:false}]));
+  ws.onmessage = e => {
+    const d = JSON.parse(typeof e.data==="string" ? e.data : new TextDecoder().decode(e.data));
+    upbitTick(d.code, d.trade_price);
+  };
+  ws.onclose = () => setTimeout(upbit, 3000);
+  ws.onerror = () => ws.close();
+}
+function upbitTick(code, price){
+  lastUp = Date.now();
+  if (code==="KRW-USDT"){ usdtKrw = price; $("fx").textContent = "USDT 원화 " + fKrw(price); COINS.forEach(c=>paint(c.s,0)); return; }
+  const c = COINS.find(x=>x.up===code); if(!c) return;
+  st[c.s].krw = price; paint(c.s,0);
+}
+async function upbitPoll(){
+  if (Date.now()-lastUp < 8000) return;
+  try{
+    const r = await fetch("https://api.upbit.com/v1/ticker?markets="+[...COINS.map(c=>c.up),"KRW-USDT"].join(","));
+    (await r.json()).forEach(d=>upbitTick(d.market,d.trade_price));
+  }catch(e){}
+}
+async function binancePoll(){
+  if (Date.now()-lastBn < 8000) return;
+  try{
+    const syms = encodeURIComponent(JSON.stringify(COINS.map(c=>c.bn.toUpperCase())));
+    const r = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbols="+syms);
+    (await r.json()).forEach(d=>{ const c=COINS.find(x=>x.bn===d.symbol.toLowerCase()); if(!c) return;
+      st[c.s].usd=+d.lastPrice; st[c.s].chg=+d.priceChangePercent; lastBn=Date.now(); paint(c.s,0); });
+  }catch(e){}
+}
+
+function status(){
+  const ok = Date.now()-lastBn < 15000 && Date.now()-lastUp < 15000;
+  const any = lastBn || lastUp;
+  $("live").className = "live " + (ok ? "on" : any ? "warn" : "");
+  const t = new Date(Math.max(lastBn,lastUp)||Date.now());
+  $("livetxt").textContent = ok ? "실시간 " + t.toLocaleTimeString("ko-KR",{hour12:false}) : any ? "재연결 중" : "연결 중";
+}
+
+binance(); upbit();
+upbitPoll(); binancePoll();
+setInterval(()=>{ upbitPoll(); binancePoll(); }, 5000);
+setInterval(status, 1000);
+</script>
+</body>
+</html>
